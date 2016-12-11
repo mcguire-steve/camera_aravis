@@ -68,8 +68,7 @@ typedef struct
 	ArvDomNode *pNodeSibling;
 } NODEEX;
 
-// Global variables -------------------
-struct global_s
+struct AravisCamera
 {
 	gboolean 								bCancel;
 	image_transport::CameraPublisher 		publisher;
@@ -515,17 +514,21 @@ static void NewBuffer_callback (ArvStream *pStream, ApplicationData *pApplicatio
     pBuffer = arv_stream_try_pop_buffer (pStream);
     if (pBuffer != NULL) 
     {
-        if (pBuffer->status == ARV_BUFFER_STATUS_SUCCESS) 
+        
+        if (arv_buffer_get_status(pBuffer) == ARV_BUFFER_STATUS_SUCCESS) 
         {
 			sensor_msgs::Image msg;
 			
         	pApplicationdata->nBuffers++;
-			std::vector<uint8_t> this_data(pBuffer->size);
-			memcpy(&this_data[0], pBuffer->data, pBuffer->size);
+			std::vector<uint8_t> this_data(arv_camera_get_payload(global.pCamera));
+            size_t imageSize;
+            const void* imageData = arv_buffer_get_data(pBuffer, &imageSize);
+            
+			memcpy(&this_data[0], imageData, imageSize);
 
 
 			// Camera/ROS Timestamp coordination.
-			cn				= (uint64_t)pBuffer->timestamp_ns;				// Camera now
+			cn				= arv_buffer_get_timestamp(pBuffer);				// Camera now
 			rn	 			= ros::Time::now().toNSec();					// ROS now
 			
 			if (iFrame < 10)
@@ -558,7 +561,7 @@ static void NewBuffer_callback (ArvStream *pStream, ApplicationData *pApplicatio
 			
 			// Construct the image message.
 			msg.header.stamp.fromNSec(tn);
-			msg.header.seq = pBuffer->frame_id;
+			msg.header.seq = arv_buffer_get_frame_id(pBuffer);
 			msg.header.frame_id = global.config.frame_id;
 			msg.width = global.widthRoi;
 			msg.height = global.heightRoi;
@@ -578,7 +581,7 @@ static void NewBuffer_callback (ArvStream *pStream, ApplicationData *pApplicatio
 				
         }
         else
-        	ROS_WARN ("Frame error: %s", szBufferStatusFromInt[pBuffer->status]);
+        	ROS_WARN ("Frame error: %s", szBufferStatusFromInt[arv_buffer_get_status(pBuffer)]);
         	
         arv_stream_push_buffer (pStream, pBuffer);
         iFrame++;
@@ -895,23 +898,12 @@ int main(int argc, char** argv)
 		ROS_INFO("Opened: %s-%s", arv_device_get_string_feature_value (global.pDevice, "DeviceVendorName"), arv_device_get_string_feature_value (global.pDevice, "DeviceID"));
 
 
-		// See if some basic camera features exist.
-		pGcNode = arv_device_get_feature (global.pDevice, "AcquisitionMode");
-		global.isImplementedAcquisitionMode = ARV_GC_FEATURE_NODE (pGcNode) ? arv_gc_feature_node_is_implemented (ARV_GC_FEATURE_NODE (pGcNode), &error) : FALSE;
 
-		pGcNode = arv_device_get_feature (global.pDevice, "GainRaw");
-		global.isImplementedGain = ARV_GC_FEATURE_NODE (pGcNode) ? arv_gc_feature_node_is_implemented (ARV_GC_FEATURE_NODE (pGcNode), &error) : FALSE;
-		pGcNode = arv_device_get_feature (global.pDevice, "Gain");
-		global.isImplementedGain |= ARV_GC_FEATURE_NODE (pGcNode) ? arv_gc_feature_node_is_implemented (ARV_GC_FEATURE_NODE (pGcNode), &error) : FALSE;
+		global.isImplementedGain = arv_camera_is_gain_available(global.pCamera);
+		global.isImplementedExposureTimeAbs = arv_camera_is_exposure_time_available(global.pCamera);
+		global.isImplementedExposureAuto = arv_camera_is_exposure_auto_available(global.pCamera);
+		global.isImplementedGainAuto = arv_camera_is_gain_auto_available(global.pCamera);
 
-		pGcNode = arv_device_get_feature (global.pDevice, "ExposureTimeAbs");
-		global.isImplementedExposureTimeAbs = ARV_GC_FEATURE_NODE (pGcNode) ? arv_gc_feature_node_is_implemented (ARV_GC_FEATURE_NODE (pGcNode), &error) : FALSE;
-
-		pGcNode = arv_device_get_feature (global.pDevice, "ExposureAuto");
-		global.isImplementedExposureAuto = ARV_GC_FEATURE_NODE (pGcNode) ? arv_gc_feature_node_is_implemented (ARV_GC_FEATURE_NODE (pGcNode), &error) : FALSE;
-
-		pGcNode = arv_device_get_feature (global.pDevice, "GainAuto");
-		global.isImplementedGainAuto = ARV_GC_FEATURE_NODE (pGcNode) ? arv_gc_feature_node_is_implemented (ARV_GC_FEATURE_NODE (pGcNode), &error) : FALSE;
 
 		pGcNode = arv_device_get_feature (global.pDevice, "TriggerSelector");
 		global.isImplementedTriggerSelector = ARV_GC_FEATURE_NODE (pGcNode) ? arv_gc_feature_node_is_implemented (ARV_GC_FEATURE_NODE (pGcNode), &error) : FALSE;
@@ -928,21 +920,9 @@ int main(int argc, char** argv)
 		pGcNode = arv_device_get_feature (global.pDevice, "GevSCPSPacketSize");
 		global.isImplementedMtu = ARV_GC_FEATURE_NODE (pGcNode) ? arv_gc_feature_node_is_implemented (ARV_GC_FEATURE_NODE (pGcNode), &error) : FALSE;
 
-		pGcNode = arv_device_get_feature (global.pDevice, "AcquisitionFrameRateEnable");
-		global.isImplementedAcquisitionFrameRateEnable = ARV_GC_FEATURE_NODE (pGcNode) ? arv_gc_feature_node_is_implemented (ARV_GC_FEATURE_NODE (pGcNode), &error) : FALSE;
+		global.isImplementedAcquisitionFrameRateEnable = arv_camera_is_frame_rate_available(global.pCamera);
 
-		// Find the key name for framerate.
-		global.keyAcquisitionFrameRate = NULL;
-		for (i=0; i<2; i++)
-		{
-			pGcNode = arv_device_get_feature (global.pDevice, pkeyAcquisitionFrameRate[i]);
-			global.isImplementedAcquisitionFrameRate = pGcNode ? arv_gc_feature_node_is_implemented (ARV_GC_FEATURE_NODE (pGcNode), &error) : FALSE;
-			if (global.isImplementedAcquisitionFrameRate)
-			{
-				global.keyAcquisitionFrameRate = pkeyAcquisitionFrameRate[i];
-				break;
-			}
-		}
+	
 
 
 		// Get parameter bounds.
@@ -971,14 +951,12 @@ int main(int argc, char** argv)
 
 		// Initial camera settings.
 		if (global.isImplementedExposureTimeAbs)
-			arv_device_set_float_feature_value(global.pDevice, "ExposureTimeAbs", global.config.ExposureTimeAbs);
+			arv_camera_set_exposure_time(global.pCamera, global.config.ExposureTimeAbs);
 		if (global.isImplementedGain)
 			arv_camera_set_gain(global.pCamera, global.config.Gain);
-			//arv_device_set_integer_feature_value(global.pDevice, "GainRaw", global.config.GainRaw);
-		if (global.isImplementedAcquisitionFrameRateEnable)
-			arv_device_set_integer_feature_value(global.pDevice, "AcquisitionFrameRateEnable", 1);
 		if (global.isImplementedAcquisitionFrameRate)
-			arv_device_set_float_feature_value(global.pDevice, global.keyAcquisitionFrameRate, global.config.AcquisitionFrameRate);
+            arv_camera_set_frame_rate(global.pCamera, global.config.AcquisitionFrameRate); 
+
 
 
 		// Set up the triggering.
@@ -1041,7 +1019,7 @@ int main(int argc, char** argv)
 		ROS_INFO ("    Can set FrameRate:     %s", global.isImplementedAcquisitionFrameRate ? "True" : "False");
 		if (global.isImplementedAcquisitionFrameRate)
 		{
-			global.config.AcquisitionFrameRate = arv_device_get_float_feature_value (global.pDevice, global.keyAcquisitionFrameRate);
+			global.config.AcquisitionFrameRate = arv_camera_get_frame_rate(global.pCamera);
 			ROS_INFO ("    AcquisitionFrameRate = %g hz", global.config.AcquisitionFrameRate);
 		}
 
@@ -1062,7 +1040,7 @@ int main(int argc, char** argv)
 		ROS_INFO ("    Can set FocusPos:      %s", global.isImplementedFocusPos ? "True" : "False");
 
 		if (global.isImplementedMtu)
-			ROS_INFO ("    Network mtu          = %lu", arv_device_get_integer_feature_value(global.pDevice, "GevSCPSPacketSize"));
+			ROS_INFO ("    Network mtu          = %lu", 	arv_camera_gv_get_packet_size(global.pCamera));
 
 		ROS_INFO ("    ---------------------------");
 
@@ -1112,8 +1090,7 @@ int main(int argc, char** argv)
 
 		void (*pSigintHandlerOld)(int);
 		pSigintHandlerOld = signal (SIGINT, set_cancel);
-
-		arv_device_execute_command (global.pDevice, "AcquisitionStart");
+        arv_camera_start_acquisition(global.pCamera);
 
 		applicationdata.main_loop = g_main_loop_new (NULL, FALSE);
 		g_main_loop_run (applicationdata.main_loop);
@@ -1141,7 +1118,7 @@ int main(int argc, char** argv)
 		ROS_INFO ("Resent buffers    = %Lu", (unsigned long long) n_resent);
 		ROS_INFO ("Missing           = %Lu", (unsigned long long) n_missing);
 
-		arv_device_execute_command (global.pDevice, "AcquisitionStop");
+        arv_camera_stop_acquisition(global.pCamera);
 
 		g_object_unref (pStream);
 
