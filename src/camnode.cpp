@@ -108,6 +108,7 @@ struct AravisCamera
 	const char                             *pszPixelformat;
 	unsigned								nBytesPixel;
 	ros::NodeHandle 					   *phNode;
+
 	ArvCamera 							   *pCamera;
 	ArvDevice 							   *pDevice;
 	int										mtu;
@@ -163,24 +164,26 @@ ArvGvStream *CreateStream(void)
 
 		if (!ARV_IS_GV_STREAM (pStream))
 			ROS_WARN("Stream is not a GV_STREAM");
-
-		if (bAutoBuffer)
-			g_object_set (pStream,
-					      "socket-buffer",
-						  ARV_GV_STREAM_SOCKET_BUFFER_AUTO,
-						  "socket-buffer-size", 0,
-						  NULL);
-		if (!bPacketResend)
-			g_object_set (pStream,
-					      "packet-resend",
-						  bPacketResend ? ARV_GV_STREAM_PACKET_RESEND_ALWAYS : ARV_GV_STREAM_PACKET_RESEND_NEVER,
-						  NULL);
-		g_object_set (pStream,
-				          "packet-timeout",
-						  (unsigned) timeoutPacket * 1000,
-						  "frame-retention", (unsigned) timeoutFrameRetention * 1000,
-					  NULL);
-	
+        else
+            {
+                //GigEVision-specific things
+                if (bAutoBuffer)
+                    g_object_set (pStream,
+                                  "socket-buffer",
+                                  ARV_GV_STREAM_SOCKET_BUFFER_AUTO,
+                                  "socket-buffer-size", 0,
+                                  NULL);
+                if (!bPacketResend)
+                    g_object_set (pStream,
+                                  "packet-resend",
+                                  bPacketResend ? ARV_GV_STREAM_PACKET_RESEND_ALWAYS : ARV_GV_STREAM_PACKET_RESEND_NEVER,
+                                  NULL);
+                g_object_set (pStream,
+                              "packet-timeout",
+                              (unsigned) timeoutPacket * 1000,
+                              "frame-retention", (unsigned) timeoutFrameRetention * 1000,
+                              NULL);
+            }
 		// Load up some buffers.
 		nbytesPayload = arv_camera_get_payload (global.pCamera);
 		for (int i=0; i<50; i++)
@@ -276,8 +279,9 @@ void RosReconfigure_callback(Config &config, uint32_t level)
     {
     	if (global.isImplementedExposureTimeAbs)
 		{
+            
 			ROS_INFO ("Set ExposureTimeAbs = %f", config.ExposureTimeAbs);
-			arv_device_set_float_feature_value (global.pDevice, "ExposureTimeAbs", config.ExposureTimeAbs);
+            arv_camera_set_exposure_time(global.pCamera, config.ExposureTimeAbs);
 		}
     	else
     		ROS_INFO ("Camera does not support ExposureTimeAbs.");
@@ -840,10 +844,9 @@ int main(int argc, char** argv)
     global.config = global.config.__getDefault__();
     global.idSoftwareTriggerTimer = 0;
 
-    ros::init(argc, argv, "camera");
+    ros::init(argc, argv, "aravis_camera");
     global.phNode = new ros::NodeHandle();
-
-
+ 
     //g_type_init ();
 
     // Print out some useful info.
@@ -898,14 +901,12 @@ int main(int argc, char** argv)
 		ROS_INFO("Opened: %s-%s", arv_device_get_string_feature_value (global.pDevice, "DeviceVendorName"), arv_device_get_string_feature_value (global.pDevice, "DeviceID"));
 
 
-
 		global.isImplementedGain = arv_camera_is_gain_available(global.pCamera);
 		global.isImplementedExposureTimeAbs = arv_camera_is_exposure_time_available(global.pCamera);
 		global.isImplementedExposureAuto = arv_camera_is_exposure_auto_available(global.pCamera);
 		global.isImplementedGainAuto = arv_camera_is_gain_auto_available(global.pCamera);
 
-
-		pGcNode = arv_device_get_feature (global.pDevice, "TriggerSelector");
+        pGcNode = arv_device_get_feature (global.pDevice, "TriggerSelector");
 		global.isImplementedTriggerSelector = ARV_GC_FEATURE_NODE (pGcNode) ? arv_gc_feature_node_is_implemented (ARV_GC_FEATURE_NODE (pGcNode), &error) : FALSE;
 
 		pGcNode = arv_device_get_feature (global.pDevice, "TriggerSource");
@@ -948,7 +949,25 @@ int main(int argc, char** argv)
 		global.configMin.AcquisitionFrameRate =    0.0;
 		global.configMax.AcquisitionFrameRate = 1000.0;
 
+        //Write global params:
+        WriteCameraFeaturesFromRosparam ();
+        //Read any local params passed, checking for bounds:
 
+        int expTime;
+        double gain;
+        ros::NodeHandle local_ns_("~");
+        if (local_ns_.getParam("exposure", expTime))
+            {
+                ROS_INFO("Setting exposure to %u from cmd line", expTime);
+                global.config.ExposureTimeAbs = expTime;
+            }
+
+        if (local_ns_.getParam("gain", gain))
+            {
+                ROS_INFO("Setting gain to %1.1f from cmd line", gain);
+                global.config.Gain = gain;
+            }
+         
 		// Initial camera settings.
 		if (global.isImplementedExposureTimeAbs)
 			arv_camera_set_exposure_time(global.pCamera, global.config.ExposureTimeAbs);
@@ -972,7 +991,7 @@ int main(int argc, char** argv)
 		}
 
 
-		WriteCameraFeaturesFromRosparam ();
+		
 
 
 #ifdef TUNING			
@@ -984,18 +1003,20 @@ int main(int argc, char** argv)
 		global.pCameraInfoManager = new camera_info_manager::CameraInfoManager(ros::NodeHandle(ros::this_node::getName()), arv_device_get_string_feature_value (global.pDevice, "DeviceID"));
 
 		// Start the dynamic_reconfigure server.
+        /*
 		dynamic_reconfigure::Server<Config> 				reconfigureServer;
 		dynamic_reconfigure::Server<Config>::CallbackType 	reconfigureCallback;
 
 		reconfigureCallback = boost::bind(&RosReconfigure_callback, _1, _2);
 		reconfigureServer.setCallback(reconfigureCallback);
-		ros::Duration(2.0).sleep();
-
+		ros::Duration(1.0).sleep();
+        */
+        
 
 		// Get parameter current values.
 		global.xRoi=0; global.yRoi=0; global.widthRoi=0; global.heightRoi=0;
 		arv_camera_get_region (global.pCamera, &global.xRoi, &global.yRoi, &global.widthRoi, &global.heightRoi);
-		global.config.ExposureTimeAbs 	= global.isImplementedExposureTimeAbs ? arv_device_get_float_feature_value (global.pDevice, "ExposureTimeAbs") : 0;
+		global.config.ExposureTimeAbs 	= global.isImplementedExposureTimeAbs ? arv_camera_get_exposure_time (global.pCamera) : 0;
 		global.config.Gain      		= global.isImplementedGain ? arv_camera_get_gain (global.pCamera) : 0.0;
 		global.pszPixelformat   		= g_string_ascii_down(g_string_new(arv_device_get_string_feature_value(global.pDevice, "PixelFormat")))->str;
 		global.nBytesPixel      		= ARV_PIXEL_FORMAT_BYTE_PER_PIXEL(arv_device_get_integer_feature_value(global.pDevice, "PixelFormat"));
@@ -1114,10 +1135,12 @@ int main(int argc, char** argv)
 		ROS_INFO ("Completed buffers = %Lu", (unsigned long long) n_completed_buffers);
 		ROS_INFO ("Failures          = %Lu", (unsigned long long) n_failures);
 		ROS_INFO ("Underruns         = %Lu", (unsigned long long) n_underruns);
-		arv_gv_stream_get_statistics (pStream, &n_resent, &n_missing);
-		ROS_INFO ("Resent buffers    = %Lu", (unsigned long long) n_resent);
-		ROS_INFO ("Missing           = %Lu", (unsigned long long) n_missing);
-
+        if (ARV_IS_GV_STREAM(pStream))
+            {
+                arv_gv_stream_get_statistics (pStream, &n_resent, &n_missing);
+                ROS_INFO ("Resent buffers    = %Lu", (unsigned long long) n_resent);
+                ROS_INFO ("Missing           = %Lu", (unsigned long long) n_missing);
+            }
         arv_camera_stop_acquisition(global.pCamera);
 
 		g_object_unref (pStream);
