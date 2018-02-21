@@ -956,7 +956,7 @@ int main(int argc, char** argv)
 		pGcNode = arv_device_get_feature (global.pDevice, "GevSCPSPacketSize");
 		global.isImplementedMtu = ARV_GC_FEATURE_NODE (pGcNode) ? arv_gc_feature_node_is_implemented (ARV_GC_FEATURE_NODE (pGcNode), &error) : FALSE;
 
-		global.isImplementedAcquisitionFrameRateEnable = arv_camera_is_frame_rate_available(global.pCamera);
+		global.isImplementedAcquisitionFrameRateEnable = 1; //arv_camera_is_frame_rate_available(global.pCamera);
 
 	
 
@@ -990,7 +990,14 @@ int main(int argc, char** argv)
 
         int expTime;
         double gain;
+        double framerate = 0.0;
         ros::NodeHandle local_ns_("~");
+        if (local_ns_.getParam("framerate", framerate))
+            {
+                ROS_INFO("Setting framerate to %1.1f from cmd line", framerate);
+                global.config.AcquisitionFrameRate = framerate;
+                    
+            }
         if (local_ns_.getParam("exposure", expTime))
             {
                 ROS_INFO("Setting exposure to %u from cmd line", expTime);
@@ -1004,16 +1011,21 @@ int main(int argc, char** argv)
             }
          
 		// Initial camera settings.
+        
 		if (global.isImplementedExposureTimeAbs)
 			arv_camera_set_exposure_time(global.pCamera, global.config.ExposureTimeAbs);
 		if (global.isImplementedGain)
 			arv_camera_set_gain(global.pCamera, global.config.Gain);
-		if (global.isImplementedAcquisitionFrameRate)
+
+        
+        //if (global.isImplementedAcquisitionFrameRate)
+        if (framerate != 0.0) //set from command line
             arv_camera_set_frame_rate(global.pCamera, global.config.AcquisitionFrameRate); 
+        
 
 
-
-		// Set up the triggering.
+		// Set up the triggering
+        
 		if (global.isImplementedTriggerMode)
 		{
 			if (global.isImplementedTriggerSelector && global.isImplementedTriggerMode)
@@ -1025,7 +1037,7 @@ int main(int argc, char** argv)
 			}
 		}
 
-
+        
 		
 
 
