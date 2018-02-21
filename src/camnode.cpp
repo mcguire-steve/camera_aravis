@@ -60,6 +60,7 @@ typedef camera_aravis::CameraAravisConfig Config;
 
 static gboolean SoftwareTrigger_callback (void *);
 
+
 typedef struct
 {
 	const char *szName;
@@ -74,6 +75,7 @@ struct AravisCamera
 	image_transport::CameraPublisher 		publisher;
 	camera_info_manager::CameraInfoManager *pCameraInfoManager;
 	sensor_msgs::CameraInfo 				camerainfo;
+    const char*                             devSerialNumber;
 	gint 									width, height; // buffer->width and buffer->height not working, so I used a global.
 	Config 									config;
 	Config 									configMin;
@@ -106,6 +108,7 @@ struct AravisCamera
 	int                                     heightSensor;
 
 	const char                             *pszPixelformat;
+    const char                             *rosPixelFormat;
 	unsigned								nBytesPixel;
 	ros::NodeHandle 					   *phNode;
 
@@ -141,6 +144,17 @@ const char	*szBufferStatusFromInt[] = {
 										"ARV_BUFFER_STATUS_ABORTED"
 										};
 
+const char *getROSPixelFormat(const char* genicamFmt)
+{
+    if (strcmp(genicamFmt, "bayergb8") == 0)
+        {
+            return sensor_msgs::image_encodings::BAYER_GBRG8.c_str();
+        }
+    else if (strcmp(genicamFmt, "mono8") == 0)
+        {
+            return sensor_msgs::image_encodings::MONO8.c_str();
+        }
+}
 
 static void set_cancel (int signal)
 {
@@ -569,7 +583,7 @@ static void NewBuffer_callback (ArvStream *pStream, ApplicationData *pApplicatio
 			msg.header.frame_id = global.config.frame_id;
 			msg.width = global.widthRoi;
 			msg.height = global.heightRoi;
-			msg.encoding = global.pszPixelformat;
+			msg.encoding = global.rosPixelFormat;
 			msg.step = msg.width * global.nBytesPixel;
 			msg.data = this_data;
 
@@ -825,6 +839,25 @@ void WriteCameraFeaturesFromRosparam(void)
 } // WriteCameraFeaturesFromRosparam()
 
 
+const char* getCameraSerialNumber(ArvCamera* cam)
+{
+    //Find something that works for this camera:
+    const char* sn = arv_device_get_string_feature_value (global.pDevice, "DeviceID");
+    if (sn == NULL)
+        {
+            //Try alternative:
+            sn = arv_device_get_string_feature_value (global.pDevice, "DeviceSerialNumber");
+            if (sn == NULL)
+                {
+                    ROS_INFO("Unable to get serial number, using 000000");
+                    return "000000";
+                }
+            else
+                return sn;
+        }
+    else
+        return sn;  
+}
 
 int main(int argc, char** argv) 
 {
@@ -898,7 +931,9 @@ int main(int argc, char** argv)
 		}
 
 		global.pDevice = arv_camera_get_device(global.pCamera);
-		ROS_INFO("Opened: %s-%s", arv_device_get_string_feature_value (global.pDevice, "DeviceVendorName"), arv_device_get_string_feature_value (global.pDevice, "DeviceID"));
+        global.devSerialNumber = getCameraSerialNumber(global.pCamera);
+        
+		ROS_INFO("Opened: %s-%s", arv_device_get_string_feature_value (global.pDevice, "DeviceVendorName"), global.devSerialNumber);
 
 
 		global.isImplementedGain = arv_camera_is_gain_available(global.pCamera);
@@ -998,9 +1033,9 @@ int main(int argc, char** argv)
 		ros::Publisher pubInt64 = global.phNode->advertise<std_msgs::Int64>(ros::this_node::getName()+"/dt", 100);
 		global.ppubInt64 = &pubInt64;
 #endif
-    	
+ 
 		// Start the camerainfo manager.
-		global.pCameraInfoManager = new camera_info_manager::CameraInfoManager(ros::NodeHandle(ros::this_node::getName()), arv_device_get_string_feature_value (global.pDevice, "DeviceID"));
+		global.pCameraInfoManager = new camera_info_manager::CameraInfoManager(ros::NodeHandle(ros::this_node::getName()), global.devSerialNumber);
 
 		// Start the dynamic_reconfigure server.
         /*
@@ -1019,6 +1054,7 @@ int main(int argc, char** argv)
 		global.config.ExposureTimeAbs 	= global.isImplementedExposureTimeAbs ? arv_camera_get_exposure_time (global.pCamera) : 0;
 		global.config.Gain      		= global.isImplementedGain ? arv_camera_get_gain (global.pCamera) : 0.0;
 		global.pszPixelformat   		= g_string_ascii_down(g_string_new(arv_device_get_string_feature_value(global.pDevice, "PixelFormat")))->str;
+        global.rosPixelFormat           = getROSPixelFormat(global.pszPixelformat);
 		global.nBytesPixel      		= ARV_PIXEL_FORMAT_BYTE_PER_PIXEL(arv_device_get_integer_feature_value(global.pDevice, "PixelFormat"));
 		global.config.FocusPos  		= global.isImplementedFocusPos ? arv_device_get_integer_feature_value (global.pDevice, "FocusPos") : 0;
 		
@@ -1028,11 +1064,11 @@ int main(int argc, char** argv)
 		ROS_INFO ("    ---------------------------");
 		ROS_INFO ("    Vendor name          = %s", arv_device_get_string_feature_value (global.pDevice, "DeviceVendorName"));
 		ROS_INFO ("    Model name           = %s", arv_device_get_string_feature_value (global.pDevice, "DeviceModelName"));
-		ROS_INFO ("    Device id            = %s", arv_device_get_string_feature_value (global.pDevice, "DeviceID"));
+		ROS_INFO ("    Device id            = %s", global.devSerialNumber);
 		ROS_INFO ("    Sensor width         = %d", global.widthSensor);
 		ROS_INFO ("    Sensor height        = %d", global.heightSensor);
 		ROS_INFO ("    ROI x,y,w,h          = %d, %d, %d, %d", global.xRoi, global.yRoi, global.widthRoi, global.heightRoi);
-		ROS_INFO ("    Pixel format         = %s", global.pszPixelformat);
+		ROS_INFO ("    Pixel format         = %s", global.rosPixelFormat);
 		ROS_INFO ("    BytesPerPixel        = %d", global.nBytesPixel);
 		ROS_INFO ("    Acquisition Mode     = %s", global.isImplementedAcquisitionMode ? arv_device_get_string_feature_value (global.pDevice, "AcquisitionMode") : "(not implemented in camera)");
 		ROS_INFO ("    Trigger Mode         = %s", global.isImplementedTriggerMode ? arv_device_get_string_feature_value (global.pDevice, "TriggerMode") : "(not implemented in camera)");
