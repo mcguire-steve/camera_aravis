@@ -150,6 +150,10 @@ const char *getROSPixelFormat(const char* genicamFmt)
         {
             return sensor_msgs::image_encodings::BAYER_GBRG8.c_str();
         }
+    if (strcmp(genicamFmt, "bayerrg8") == 0)
+        {
+            return sensor_msgs::image_encodings::BAYER_RGGB8.c_str();
+        }
     else if (strcmp(genicamFmt, "mono8") == 0)
         {
             return sensor_msgs::image_encodings::MONO8.c_str();
@@ -991,6 +995,7 @@ int main(int argc, char** argv)
         int expTime;
         double gain;
         double framerate = 0.0;
+        int mtu;
         ros::NodeHandle local_ns_("~");
         if (local_ns_.getParam("framerate", framerate))
             {
@@ -1009,7 +1014,13 @@ int main(int argc, char** argv)
                 ROS_INFO("Setting gain to %1.1f from cmd line", gain);
                 global.config.Gain = gain;
             }
-         
+        
+        if (local_ns_.getParam("mtu", mtu))
+            {
+                ROS_INFO("Setting mtu to %d from cmd line", mtu);
+                global.config.mtu = mtu;
+                arv_camera_gv_set_packet_size(global.pCamera, mtu);
+            }
 		// Initial camera settings.
         
 		if (global.isImplementedExposureTimeAbs)
